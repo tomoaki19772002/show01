@@ -4,6 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>診察案内システム</title>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -76,6 +81,30 @@
       color: #3a5a7a;
       font-size: 2rem;
       line-height: 3;
+    }
+
+    /* 同期インジケーター */
+    .sync-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.78rem;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: #e8f4ea;
+      color: #2c8a5f;
+      margin-top: 12px;
+    }
+    .sync-badge.disconnected { background: #fff0e0; color: #a06000; }
+    .sync-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #2c8a5f;
+      animation: pulse 1.5s infinite;
+    }
+    .sync-badge.disconnected .sync-dot { background: #a06000; animation: none; }
+    @keyframes pulse {
+      0%,100% { opacity: 1; } 50% { opacity: 0.3; }
     }
 
     /* 操作パネル */
@@ -237,6 +266,10 @@
     <div class="number empty" id="displayNumber">－</div>
     <div class="room-label">診察室</div>
     <div class="room-number empty" id="displayRoom">－</div>
+    <div id="syncBadge" class="sync-badge disconnected">
+      <div class="sync-dot"></div>
+      <span id="syncText">接続中...</span>
+    </div>
   </div>
 
   <!-- 操作パネル -->
@@ -275,16 +308,34 @@
   </div>
 
 <script>
+  // ── Firebase 設定 ──────────────────────────────────────────────
+  const firebaseConfig = {
+    apiKey:            "AIzaSyAM1kw9lv5z9UO1vi5R5ecT7hcIMQQt_MM",
+    authDomain:        "kawagoeasahi-72e5d.firebaseapp.com",
+    databaseURL:       "https://kawagoeasahi-72e5d-default-rtdb.firebaseio.com",
+    projectId:         "kawagoeasahi-72e5d",
+    storageBucket:     "kawagoeasahi-72e5d.firebasestorage.app",
+    messagingSenderId: "351069837644",
+    appId:             "1:351069837644:web:da3a3c8e877aee299017e9"
+  };
+
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+  const callRef = db.ref('patientCall');
+
+  // ── 状態 ──────────────────────────────────────────────────────
   let selectedRoom = null;
   let lastPatient = null;
   let lastRoom = null;
 
+  // ── 診察室選択 ───────────────────────────────────────────────
   function selectRoom(room) {
     selectedRoom = room;
     document.getElementById('room1').classList.toggle('selected', room === 1);
     document.getElementById('room2').classList.toggle('selected', room === 2);
   }
 
+  // ── 案内ボタン ───────────────────────────────────────────────
   function announce() {
     const numInput = document.getElementById('patientNumber');
     const patient = parseInt(numInput.value, 10);
@@ -298,21 +349,72 @@
       return;
     }
 
-    lastPatient = patient;
-    lastRoom = selectedRoom;
+    const speakerId = parseInt(document.getElementById('speakerSelect').value, 10);
 
-    updateDisplay(patient, selectedRoom);
-    speak(patient, selectedRoom);
-    addHistory(patient, selectedRoom);
-    document.getElementById('repeatBtn').disabled = false;
+    // Firebase に書き込む → 全端末のリスナーが反応する
+    callRef.set({
+      patient,
+      room: selectedRoom,
+      speakerId,
+      timestamp: Date.now()
+    });
   }
 
   function repeatAnnounce() {
     if (lastPatient && lastRoom) {
-      speak(lastPatient, lastRoom);
+      const speakerId = parseInt(document.getElementById('speakerSelect').value, 10);
+      callRef.set({
+        patient: lastPatient,
+        room: lastRoom,
+        speakerId,
+        timestamp: Date.now()
+      });
     }
   }
 
+  // ── Firebase リスナー（全端末で受信・表示・音声）────────────
+  let prevTimestamp = null;
+
+  callRef.on('value', snapshot => {
+    const data = snapshot.val();
+    if (!data || !data.timestamp) return;
+
+    // 初回ロード時（ページ開いた瞬間）は再生しない
+    if (prevTimestamp === null) {
+      prevTimestamp = data.timestamp;
+      updateDisplay(data.patient, data.room);
+      lastPatient = data.patient;
+      lastRoom    = data.room;
+      document.getElementById('repeatBtn').disabled = false;
+      return;
+    }
+
+    // 新しい案内だけ再生
+    if (data.timestamp !== prevTimestamp) {
+      prevTimestamp = data.timestamp;
+      lastPatient = data.patient;
+      lastRoom    = data.room;
+      updateDisplay(data.patient, data.room);
+      addHistory(data.patient, data.room);
+      speakAnnouncement(data.patient, data.room, data.speakerId || 13);
+      document.getElementById('repeatBtn').disabled = false;
+    }
+  });
+
+  // ── 接続状態インジケーター ───────────────────────────────────
+  db.ref('.info/connected').on('value', snap => {
+    const badge = document.getElementById('syncBadge');
+    const text  = document.getElementById('syncText');
+    if (snap.val()) {
+      badge.classList.remove('disconnected');
+      text.textContent = '全端末同期中';
+    } else {
+      badge.classList.add('disconnected');
+      text.textContent = 'オフライン';
+    }
+  });
+
+  // ── VOICEVOX / 音声 ──────────────────────────────────────────
   const VOICEVOX_URL = 'http://localhost:50021';
 
   function fetchWithTimeout(url, options, ms) {
@@ -324,22 +426,17 @@
 
   async function checkVoicevox() {
     const el = document.getElementById('voicevoxStatus');
-    el.textContent = '🔄 VOICEVOX 確認中...';
-    el.style.background = '#f0f4f8';
-    el.style.color = '#555';
     try {
       const res = await fetchWithTimeout(`${VOICEVOX_URL}/version`, {}, 2000);
       if (res.ok) {
         const ver = await res.text();
-        el.textContent = `✅ VOICEVOX 接続中 (v${ver.replace(/"/g,'')}) 　高品質モード`;
-        el.style.background = '#e6f4ea';
-        el.style.color = '#2c8a5f';
+        el.textContent = `✅ VOICEVOX 接続中 (v${ver.replace(/"/g,'')})`;
+        el.style.background = '#e6f4ea'; el.style.color = '#2c8a5f';
         return true;
       }
     } catch {}
-    el.textContent = '⚠️ VOICEVOXが起動していません　→　ブラウザ音声で代替中';
-    el.style.background = '#fff8e1';
-    el.style.color = '#8a6d00';
+    el.textContent = '⚠️ VOICEVOX未起動 → ブラウザ音声で代替';
+    el.style.background = '#fff8e1'; el.style.color = '#8a6d00';
     return false;
   }
 
@@ -349,11 +446,8 @@
       { method: 'POST' }, 5000
     ).then(r => r.json());
 
-    query.speedScale        = 0.93;
-    query.intonationScale   = 1.15;
-    query.volumeScale       = 1.0;
-    query.prePhonemeLength  = 0.15;
-    query.postPhonemeLength = 0.25;
+    query.speedScale = 0.93; query.intonationScale = 1.15;
+    query.volumeScale = 1.0; query.prePhonemeLength = 0.15; query.postPhonemeLength = 0.25;
 
     const wav = await fetchWithTimeout(
       `${VOICEVOX_URL}/synthesis?speaker=${speakerId}`,
@@ -371,7 +465,7 @@
   }
 
   function speakFallback(text) {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = 'ja-JP'; u.rate = 0.82; u.pitch = 1.0; u.volume = 1.0;
@@ -386,13 +480,10 @@
     });
   }
 
-  async function speak(patient, room) {
+  async function speakAnnouncement(patient, room, speakerId) {
     const text = `${patient}番のかた、診察室${room}番に、おはいりください。`;
-    const speakerId = parseInt(document.getElementById('speakerSelect').value, 10);
-
     setStatus(`読み上げ中: 「${text}」`, 'speaking');
     document.getElementById('announceBtn').disabled = true;
-    document.getElementById('repeatBtn').disabled = true;
 
     try {
       const vvOk = await checkVoicevox();
@@ -407,18 +498,14 @@
 
     setStatus('案内完了');
     document.getElementById('announceBtn').disabled = false;
-    document.getElementById('repeatBtn').disabled = false;
   }
 
+  // ── 表示・履歴 ───────────────────────────────────────────────
   function updateDisplay(patient, room) {
-    const numEl = document.getElementById('displayNumber');
+    const numEl  = document.getElementById('displayNumber');
     const roomEl = document.getElementById('displayRoom');
-
-    numEl.classList.remove('empty');
-    numEl.textContent = patient;
-
-    roomEl.classList.remove('empty');
-    roomEl.textContent = room;
+    numEl.classList.remove('empty');  numEl.textContent  = patient;
+    roomEl.classList.remove('empty'); roomEl.textContent = room;
   }
 
   function setStatus(msg, type = '') {
@@ -429,21 +516,19 @@
 
   function addHistory(patient, room) {
     const list = document.getElementById('historyList');
-    const now = new Date();
-    const time = now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     const li = document.createElement('li');
     li.innerHTML = `<span>受診番号 <strong>${patient}番</strong> → 診察室 <strong>${room}番</strong></span><span class="time">${time}</span>`;
     list.prepend(li);
-    // 最大10件
     while (list.children.length > 10) list.removeChild(list.lastChild);
   }
 
-  // Enterキーで案内
+  // ── Enterキー ────────────────────────────────────────────────
   document.getElementById('patientNumber').addEventListener('keydown', e => {
     if (e.key === 'Enter') announce();
   });
 
-  // 起動時にVOICEVOX接続確認
+  // 起動時 VOICEVOX 確認
   checkVoicevox();
 </script>
 </body>
