@@ -297,7 +297,7 @@
       <label>受診番号</label>
       <div class="number-input-wrap">
         <button class="num-btn" onclick="stepNumber(-1)">－</button>
-        <input type="number" id="patientNumber" min="1" max="99" placeholder="1〜99" />
+        <input type="number" id="patientNumber" min="1" max="100" placeholder="1〜100" />
         <button class="num-btn" onclick="stepNumber(1)">＋</button>
       </div>
     </div>
@@ -345,7 +345,7 @@
   function stepNumber(delta) {
     const input = document.getElementById('patientNumber');
     const val = parseInt(input.value, 10) || 0;
-    input.value = Math.min(99, Math.max(1, val + delta));
+    input.value = Math.min(100, Math.max(1, val + delta));
   }
 
   // ── 診察室選択 ───────────────────────────────────────────────
@@ -358,8 +358,8 @@
   // ── 案内ボタン ───────────────────────────────────────────────
   function announce() {
     const patient = parseInt(document.getElementById('patientNumber').value, 10);
-    if (!patient || patient < 1 || patient > 99) {
-      setStatus('受診番号を1〜99で入力してください', 'error'); return;
+    if (!patient || patient < 1 || patient > 100) {
+      setStatus('受診番号を1〜100で入力してください', 'error'); return;
     }
     if (!selectedRoom) {
       setStatus('診察室（1番 または 3番）を選択してください', 'error'); return;
