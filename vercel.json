@@ -1,6 +1,7 @@
 {
+  "outputDirectory": ".",
   "rewrites": [
     { "source": "/idou", "destination": "/idou-yobidashi.html" },
-    { "source": "/", "destination": "/reception.html" }
+    { "source": "/", "destination": "/idou-yobidashi.html" }
   ]
 }
